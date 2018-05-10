@@ -2,7 +2,7 @@
 Arduino Feeder Controller project of Greenhouse using motor controller
 
 # Hardware Components
-- Arduino UNO
+- Arduino MEGA2560
 - 25-50A bi-directional Motor Controller
 - 8ch Relay Module
 - 4ch Relay Module
