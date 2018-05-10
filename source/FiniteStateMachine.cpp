@@ -1,4 +1,5 @@
 
+
 #include "FiniteStateMachine.h" 
 
 //FINITE STATE
@@ -38,8 +39,11 @@ void State::exit(){
 
 //FINITE STATE MACHINE
 FiniteStateMachine::FiniteStateMachine(State& current){
+
+	prevState = NULL;
 	needToTriggerEnter = true;
 	currentState = nextState = &current;
+	prevState = currentState;
 	stateChangeTime = 0;
 }
 
@@ -58,13 +62,25 @@ FiniteStateMachine& FiniteStateMachine::update() {
 	return *this;
 }
 
+FiniteStateMachine& FiniteStateMachine::backToPrev() {
+	if (prevState != NULL)
+	{
+		nextState = prevState;
+		prevState = currentState;
+		stateChangeTime = millis();
+	}
+	return *this;
+}
+
 FiniteStateMachine& FiniteStateMachine::transitionTo(State& state){
+	prevState = currentState;
 	nextState = &state;
 	stateChangeTime = millis();
 	return *this;
 }
 
 FiniteStateMachine& FiniteStateMachine::immediateTransitionTo(State& state){
+	prevState = currentState;
 	currentState->exit();
 	currentState = nextState = &state;
 	currentState->enter();
@@ -88,5 +104,10 @@ boolean FiniteStateMachine::isInState( State &state ) const {
 
 unsigned long FiniteStateMachine::timeInCurrentState() { 
 	return millis() - stateChangeTime; 
+}
+
+void FiniteStateMachine::resetTime()
+{
+	stateChangeTime = millis();
 }
 //END FINITE STATE MACHINE

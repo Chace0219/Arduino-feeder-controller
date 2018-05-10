@@ -1,127 +1,78 @@
-/* Created By jinzhouyun */
-/*
-||
-|| @file 	FBD.h
-|| @version	1.0
-|| @author	Jin zhouyun
-|| @contact	2435575291@qq.com
-||
-|| @description
-|| Definitions of Function Blocks
-||
-*/
+#ifndef FBD_H_
+#define FBD_H_
 
-#ifndef MyFunc_h
-#define MyFunc_h
+#include <arduino.h>
 
-struct tonblock
+class TON
 {
-    unsigned IN: 1; // IN option
-    unsigned PRE: 1; // IN option
-    unsigned Q: 1; // Output
-    unsigned long PT; // Set Timeout
-    unsigned long ET; // Elapsed time
-};
-typedef struct tonblock TON;
-
-struct tpblock
-{
-	unsigned EN : 1; // Enable option
-	unsigned IN: 1; // IN option
-    unsigned PRE: 1; // PRE option
-    unsigned Q: 1; // Output
-    unsigned long PT; // Set Timeout
-    unsigned long ET; // Elapsed time
-};
-typedef struct tpblock TP;
-
-struct RisingTrg
-{
-    unsigned IN : 1;
-    unsigned PRE : 1;
-    unsigned Q : 1;
-    unsigned : 5;
-};
-typedef struct RisingTrg Rtrg;
-
-struct FallingTrg
-{
-    unsigned IN : 1;
-    unsigned PRE : 1;
-    unsigned Q : 1;
-    unsigned : 5;
-};
-typedef struct FallingTrg Ftrg;
-
-
-
-// When any condition is true, it returns true
-void TONFunc(TON *pTP)
-{
-    if(pTP->IN != pTP->PRE)
-    {
-        pTP->PRE = pTP->IN;
-        if(pTP->IN == 1)
-            pTP->ET = millis();
-    }
-    
-    if(pTP->IN)
-    {
-        if((pTP->ET + pTP->PT) <= millis())
-            pTP->Q = 1;  
-    }
-    else
-    {
-        pTP->ET = millis();
-        pTP->Q = 0;
-    }
-}
-
-// When any condition is true, it returns true
-void TPFunc(TP *pTP)
-{
-	if (pTP->IN != pTP->PRE)
-	{
-		pTP->PRE = pTP->IN;
-		if (pTP->IN == 1)
-			pTP->ET = pTP->PT + millis();
-	}
+public:
+	unsigned IN : 1; // IN option
+	unsigned PRE : 1; // IN option
+	unsigned Q : 1; // Output
 	
-	if (pTP->ET > millis())
-		pTP->Q = 1;
-	else
-	{
-		pTP->Q = 0;
-		pTP->ET = millis();
-	}
+	uint32_t PT; // Set Timeout
+	uint32_t ET; // Elapsed time
 
-}
+	void update();
+	TON(uint32_t defaultPT = 1000); // default bounce time
+	void reset();
 
-// It should be used with TONFunc together
-void RTrgFunc(Rtrg *pTrg)
+};
+
+
+class TOF
 {
-    pTrg->Q = 0;
-    if(pTrg->IN != pTrg->PRE)
-    {
-        pTrg->PRE = pTrg->IN;
-        if(pTrg->PRE == 1)
-        {
-            pTrg->Q = 1;
-        }    
-    }
-}
+public:
+	unsigned IN : 1; // IN option
+	unsigned PRE : 1; // IN option
+	unsigned Q : 1; // Output
+	uint32_t PT; // Set Timeout
+	uint32_t ET; // Elapsed time
 
-// It should be used with TONFunc together
-void FTrgFunc(Ftrg *pTrg)
+	void update();
+	TOF(uint32_t defaultPT = 1000); // default bounce time
+	void reset();
+};
+
+class TP
 {
-    pTrg->Q = 0;
-    if(pTrg->IN != pTrg->PRE)
-    {
-        pTrg->PRE = pTrg->IN;
-        if(pTrg->IN == 0)
-        {
-            pTrg->Q = 1;
-        }    
-    }
-}
-#endif //MyFunc_h
+public:
+	unsigned EN : 1; // Enable option
+	unsigned IN : 1; // IN option
+	unsigned PRE : 1; // PRE option
+	unsigned Q : 1; // Output
+	uint32_t PT; // Set Timeout
+	uint32_t ET; // Elapsed time
+	
+	TP(uint32_t defaultPT = 1000);
+	void update();
+	void reset();
+	void setPT(uint32_t newPT);
+	uint32_t elepsedTime();
+};
+
+class Rtrg
+{
+public:
+	unsigned IN : 1;
+	unsigned PRE : 1;
+	unsigned Q : 1;
+	unsigned : 5;
+	Rtrg();
+	void update();
+	void reset();
+};
+
+class Ftrg
+{
+public:
+	unsigned IN : 1;
+	unsigned PRE : 1;
+	unsigned Q : 1;
+	unsigned : 5;
+	Ftrg();
+	void update();
+	void reset();
+};
+
+#endif 

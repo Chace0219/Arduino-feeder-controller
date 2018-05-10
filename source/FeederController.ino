@@ -1,5 +1,5 @@
 /*
-	
+
 */
 #include <Wire.h>
 #include "RTClib.h"
@@ -8,53 +8,54 @@
 #include "FBD.h"
 
 RTC_DS1307 rtc;
-
 bool firstFlag = true;
-volatile bool proxTriggered = false;
 
 void targetOver();
 
-TON switchEastTON, switchWestTON, switchSouthTON, switchNorthTON;
+#define SWITCHDEBOUNCE 200;
 
-TON buttonEastTON, buttonWestTON, buttonNorthTON, buttonSouthTON;
+TON switchEastTON(200), switchWestTON(200), switchSouthTON(200), switchNorthTON(200), pos2TON(200), pos3TON(200);
+TON buttonEastTON(200), buttonWestTON(200), buttonSouthTON(200), buttonNorthTON(200);
 Ftrg remotebutTrg;
+Rtrg proxSensorTrg;
 
-
-const uint16_t SWITCHDEBOUNCE = 200;
-
-extern State Startup;
-extern State Standby;
-extern State Forward;
-extern State Backward;
-
+bool millActive = false;
 // relay level
 #define RELAYON   LOW
 #define RELAYOFF  HIGH
 
-// pin definitions
-const uint8_t EASTSWITCH = 5;
-const uint8_t WESTSWITCH = 3;
-const uint8_t SOUTHSWITCH = 4;
-const uint8_t NORTHSWITCH = 13;
+const uint8_t MILLLEVEL = A0;
+const uint8_t MILLMOTOR = 12;
+
+const uint8_t EASTSWITCH = 41;
+const uint8_t WESTSWITCH = 39;
+const uint8_t SOUTHSWITCH = 40;
+const uint8_t NORTHSWITCH = 38;
+
+const uint8_t POSITION2 = 42;
+const uint8_t POSITION3 = 43;
+
+// const uint8_t PROXSENSOR = 5;
 const uint8_t PROXSENSOR = 2;
 
 // buttons
-const uint8_t EASTBUTTON = 6;
-const uint8_t WESTBUTTON = 7;
-const uint8_t NORTHBUTTON = 8;
-const uint8_t SOUTHBUTTON = 9;
+const uint8_t EASTBUTTON = 23;
+const uint8_t WESTBUTTON = 25;
+const uint8_t NORTHBUTTON = 27;
+const uint8_t SOUTHBUTTON = 29;
 
 // motor controller
-const uint8_t CARRIERPWR = A0;
-const uint8_t CARRIERFWD = A1;
-const uint8_t CARRIERREV = A2;
+const uint8_t CARRIERPWR = 22;
+const uint8_t CARRIERFWD = 24;
+const uint8_t CARRIERREV = 26;
 
-const uint8_t FEEDERPWR = A3;
-const uint8_t FEEDERFWD = 10;
-const uint8_t FEEDERREV = 11;
+const uint8_t FEEDERPWR = 28;
+const uint8_t FEEDERFWD = 30;
+const uint8_t FEEDERREV = 32;
 
-const uint8_t SUPPLYPWR = 12;
-const uint8_t SUPPLYACT = 13;
+const uint8_t SUPPLYPWR = 4;
+const uint8_t SUPPLYACT = 5;
+
 
 // time schedules settings
 typedef struct
@@ -64,17 +65,27 @@ typedef struct
 	uint8_t nSec;
 }SettingTime;
 
+/*
 #define SCHEDULECOUNT 10
 SettingTime schedules[SCHEDULECOUNT] = {
-	{ 15, 03, 0 },{ 16, 34, 0 },{ 7, 0, 0 },{ 9, 0, 0 },{ 11, 0, 0 },{ 15, 0, 0 },{ 17, 0, 0 },{ 19, 0, 0 },{ 20, 0, 0 },{ 21, 0, 0 }
+{ 15, 03, 0 },{ 16, 34, 0 },{ 7, 0, 0 },{ 9, 0, 0 },{ 11, 0, 0 },{ 15, 0, 0 },{ 17, 0, 0 },{ 19, 0, 0 },{ 20, 0, 0 },{ 21, 0, 0 }
+};
+*/
+
+#define SCHEDULECOUNT 1
+SettingTime schedules[SCHEDULECOUNT] = {
+	{ 10, 55, 30 }
 };
 
 void initPorts()
 {
+	// Wireless button input using interrupt 
 	pinMode(EASTSWITCH, INPUT_PULLUP);
 	pinMode(WESTSWITCH, INPUT_PULLUP);
 	pinMode(SOUTHSWITCH, INPUT_PULLUP);
 	pinMode(NORTHSWITCH, INPUT_PULLUP);
+	pinMode(POSITION2, INPUT_PULLUP);
+	pinMode(POSITION3, INPUT_PULLUP);
 
 	// prox sensor interrupt
 	pinMode(PROXSENSOR, INPUT_PULLUP);
@@ -85,6 +96,7 @@ void initPorts()
 	pinMode(WESTBUTTON, INPUT_PULLUP);
 	pinMode(NORTHBUTTON, INPUT_PULLUP);
 	pinMode(SOUTHBUTTON, INPUT_PULLUP);
+
 
 	pinMode(CARRIERPWR, OUTPUT);
 	digitalWrite(CARRIERPWR, RELAYOFF);
@@ -104,561 +116,28 @@ void initPorts()
 	digitalWrite(SUPPLYPWR, RELAYOFF);
 	pinMode(SUPPLYACT, OUTPUT);
 	digitalWrite(SUPPLYACT, RELAYOFF);
+
+	pinMode(MILLMOTOR, OUTPUT);
 }
 
-void initFBDs()
-{
-	
-	switchEastTON.IN = false;
-	switchEastTON.Q = false;
-	switchEastTON.PRE = false;
-	switchEastTON.IN = false;
-	switchEastTON.ET = false;
-	switchEastTON.PT = SWITCHDEBOUNCE;
+State Startup = State(NULL);
+State carrierToHome = State(NULL);
+State feederToHome = State(NULL);
+State Standby = State(NULL);
 
-	switchWestTON.IN = false;
-	switchWestTON.Q = false;
-	switchWestTON.PRE = false;
-	switchWestTON.IN = false;
-	switchWestTON.ET = false;
-	switchWestTON.PT = SWITCHDEBOUNCE;
+State Pos4Supply = State(NULL);
+State Pos4ToPos3 = State(NULL);
+State Pos3Supply = State(NULL);
+State Pos3ToPos2 = State(NULL);
+State Pos2Supply = State(NULL);
+State Pos2ToPos1 = State(NULL);
+State Pos1Supply = State(NULL);
+State Pos1ToPos4 = State(NULL);
 
-	switchSouthTON.IN = false;
-	switchSouthTON.Q = false;
-	switchSouthTON.PRE = false;
-	switchSouthTON.IN = false;
-	switchSouthTON.ET = false;
-	switchSouthTON.PT = SWITCHDEBOUNCE;
-
-	switchNorthTON.IN = false;
-	switchNorthTON.Q = false;
-	switchNorthTON.PRE = false;
-	switchNorthTON.IN = false;
-	switchNorthTON.ET = false;
-	switchNorthTON.PT = SWITCHDEBOUNCE;
-
-	buttonEastTON.IN = false;
-	buttonEastTON.Q = false;
-	buttonEastTON.PRE = false;
-	buttonEastTON.IN = false;
-	buttonEastTON.ET = false;
-	buttonEastTON.PT = SWITCHDEBOUNCE;
-
-	buttonWestTON.IN = false;
-	buttonWestTON.Q = false;
-	buttonWestTON.PRE = false;
-	buttonWestTON.IN = false;
-	buttonWestTON.ET = false;
-	buttonWestTON.PT = SWITCHDEBOUNCE;
-
-	buttonNorthTON.IN = false;
-	buttonNorthTON.Q = false;
-	buttonNorthTON.PRE = false;
-	buttonNorthTON.IN = false;
-	buttonNorthTON.ET = false;
-	buttonNorthTON.PT = SWITCHDEBOUNCE;
-
-	buttonSouthTON.IN = false;
-	buttonSouthTON.Q = false;
-	buttonSouthTON.PRE = false;
-	buttonSouthTON.IN = false;
-	buttonSouthTON.ET = false;
-	buttonSouthTON.PT = SWITCHDEBOUNCE;
-
-	remotebutTrg.IN = false;
-	remotebutTrg.PRE = false;
-	remotebutTrg.Q = false;
-
-}
-
-extern FSM controller;
-
-void carrierToHomeEnter();
-void carrierToHomeUpdate();
-void feederToHomeEnter();
-void feederToHomeUpdate();
-void feederToHomeExit();
-
-void standbyEnter();
-void standbyUpdate();
-
-void supplyPos1Enter();
-void supplyPos1Update();
-
-void movePos1_2Enter();
-void movePos1_2Update();
-
-void supplyPos2Enter();
-void supplyPos2Update();
-
-void movePos2_3Enter();
-void movePos2_3Update();
-
-void supplyPos3Enter();
-void supplyPos3Update();
-
-void movePos3_4Enter();
-void movePos3_4Update();
-
-void supplyPos4Enter();
-void supplyPos4Update();
-
-void manualEnter();
-void manualUpdate();
-
-void startupUpdate();
-
-State Startup = State(NULL, startupUpdate, NULL);
-
-State CarrierToHome = State(carrierToHomeEnter, carrierToHomeUpdate, feederToHomeExit);
-State FeederToHome = State(feederToHomeEnter, feederToHomeUpdate, NULL);
-State Standby = State(standbyEnter, standbyUpdate, NULL);
-
-State Pos1Supply = State(supplyPos1Enter, supplyPos1Update, NULL);
-State Pos12Pos2 = State(movePos1_2Enter, movePos1_2Update, NULL);
-
-State Pos2Supply = State(supplyPos2Enter, supplyPos2Update, NULL);
-State Pos22Pos3 = State(movePos2_3Enter, movePos2_3Update, NULL);
-
-State Pos3Supply = State(supplyPos3Enter, supplyPos3Update, NULL);
-State Pos32Pos4 = State(movePos3_4Enter, movePos3_4Update, NULL);
-
-State Pos4Supply = State(supplyPos4Enter, supplyPos4Update, NULL);
-
-State Manual = State(manualEnter, manualUpdate, NULL);
+State Manual = State(NULL);
 
 // FSM instance
 FSM controller = FSM(Startup);
-
-void startupUpdate()
-{
-	if (controller.timeInCurrentState() > 2000)
-	{
-		controller.transitionTo(CarrierToHome);
-	}
-	digitalWrite(SUPPLYPWR, RELAYOFF);
-	digitalWrite(SUPPLYACT, RELAYOFF);
-
-}
-
-void carrierToHomeEnter()
-{
-	if (switchEastTON.Q)
-	{
-		Serial.println(F("Carrier is in home position."));
-		controller.immediateTransitionTo(FeederToHome);
-	}
-	else
-	{
-		digitalWrite(CARRIERPWR, RELAYON);
-		digitalWrite(CARRIERFWD, RELAYOFF);
-		digitalWrite(CARRIERREV, RELAYON);
-
-		Serial.println(F("Carrier is moving to east edge!"));
-	}
-}
-
-void carrierToHomeUpdate()
-{
-	if (switchEastTON.Q)
-	{
-		// stop 
-		digitalWrite(CARRIERPWR, RELAYOFF);
-		digitalWrite(CARRIERFWD, RELAYOFF);
-		digitalWrite(CARRIERREV, RELAYOFF);
-		controller.transitionTo(FeederToHome);
-	}
-	else
-	{
-	}
-}
-
-void feederToHomeEnter()
-{
-	if (switchSouthTON.Q)
-	{
-		Serial.println(F("Feeder is in home position."));
-		controller.immediateTransitionTo(Standby);
-	}
-	else
-	{
-		digitalWrite(FEEDERPWR, RELAYON);
-		digitalWrite(FEEDERFWD, RELAYOFF);
-		digitalWrite(FEEDERREV, RELAYON);
-		Serial.println(F("Feeder is moving to home edge!"));
-	}
-}
-
-void feederToHomeUpdate()
-{
-	if (switchSouthTON.Q)
-	{
-		// stop 
-		digitalWrite(FEEDERPWR, RELAYOFF);
-		digitalWrite(FEEDERFWD, RELAYOFF);
-		digitalWrite(FEEDERREV, RELAYOFF);
-
-		Serial.println("Feeder is in home");
-		if (firstFlag)
-		{
-			Serial.println("enter to standby");
-			firstFlag = false;
-			controller.transitionTo(Standby);
-		}
-		else
-		{
-			Serial.println("enter to supply cycle");
-			controller.transitionTo(Pos1Supply);
-		}
-	}
-	else
-	{
-
-	}
-}
-
-void feederToHomeExit()
-{
-
-}
-
-void supplyPos1Enter()
-{
-	Serial.println(F("Carrier is moving to west in position 1."));
-
-	digitalWrite(CARRIERPWR, RELAYON);
-	digitalWrite(CARRIERFWD, RELAYON);
-	digitalWrite(CARRIERREV, RELAYOFF);
-	digitalWrite(SUPPLYPWR, RELAYON);
-	digitalWrite(SUPPLYACT, RELAYON);
-}
-
-void supplyPos1Update()
-{
-	if (switchWestTON.Q)
-	{
-		// stop 
-		digitalWrite(CARRIERPWR, RELAYOFF);
-		digitalWrite(CARRIERFWD, RELAYOFF);
-		digitalWrite(CARRIERREV, RELAYOFF);
-		digitalWrite(SUPPLYPWR, RELAYOFF);
-		digitalWrite(SUPPLYACT, RELAYOFF);
-		controller.transitionTo(Pos12Pos2);
-	}
-}
-
-void movePos1_2Enter()
-{
-	Serial.println(F("Feeder is moving to position 2."));
-	digitalWrite(FEEDERPWR, RELAYON);
-	digitalWrite(FEEDERFWD, RELAYON);
-	digitalWrite(FEEDERREV, RELAYOFF);
-	proxTriggered = false;
-}
-
-void movePos1_2Update()
-{
-	if (proxTriggered)
-	{
-		Serial.println(F("position2 is detected!"));
-
-		digitalWrite(FEEDERPWR, RELAYOFF);
-		digitalWrite(FEEDERFWD, RELAYOFF);
-		digitalWrite(FEEDERREV, RELAYOFF);
-		controller.transitionTo(Pos2Supply);
-	}
-}
-
-void supplyPos2Enter()
-{
-	Serial.println(F("Carrier is moving to east in position 2."));
-
-	digitalWrite(CARRIERPWR, RELAYON);
-	digitalWrite(CARRIERFWD, RELAYOFF);
-	digitalWrite(CARRIERREV, RELAYON);
-
-	digitalWrite(SUPPLYPWR, RELAYON);
-	digitalWrite(SUPPLYACT, RELAYON);
-}
-
-void supplyPos2Update()
-{
-	if (switchEastTON.Q)
-	{
-		// stop 
-		digitalWrite(CARRIERPWR, RELAYOFF);
-		digitalWrite(CARRIERFWD, RELAYOFF);
-		digitalWrite(CARRIERREV, RELAYOFF);
-
-		digitalWrite(SUPPLYPWR, RELAYOFF);
-		digitalWrite(SUPPLYACT, RELAYOFF);
-
-		controller.transitionTo(Pos22Pos3);
-	}
-}
-
-void movePos2_3Enter()
-{
-	Serial.println(F("Feeder is moving to position 3."));
-
-	digitalWrite(FEEDERPWR, RELAYON);
-	digitalWrite(FEEDERFWD, RELAYON);
-	digitalWrite(FEEDERREV, RELAYOFF);
-
-	proxTriggered = false;
-}
-
-void movePos2_3Update()
-{
-	if (proxTriggered)
-	{
-		Serial.println(F("position3 is detected!"));
-
-		digitalWrite(FEEDERPWR, RELAYOFF);
-		digitalWrite(FEEDERFWD, RELAYOFF);
-		digitalWrite(FEEDERREV, RELAYOFF);
-		controller.transitionTo(Pos3Supply);
-	}
-}
-
-void supplyPos3Enter()
-{
-	Serial.println(F("Carrier is moving to west in position 3."));
-
-	digitalWrite(CARRIERPWR, RELAYON);
-	digitalWrite(CARRIERFWD, RELAYON);
-	digitalWrite(CARRIERREV, RELAYOFF);
-
-	digitalWrite(SUPPLYPWR, RELAYON);
-	digitalWrite(SUPPLYACT, RELAYON);
-}
-
-void supplyPos3Update()
-{
-	if (switchWestTON.Q)
-	{
-		// stop 
-		digitalWrite(CARRIERPWR, RELAYOFF);
-		digitalWrite(CARRIERFWD, RELAYOFF);
-		digitalWrite(CARRIERREV, RELAYOFF);
-
-		digitalWrite(SUPPLYPWR, RELAYOFF);
-		digitalWrite(SUPPLYACT, RELAYOFF);
-
-		controller.transitionTo(Pos32Pos4);
-	}
-}
-
-void movePos3_4Enter()
-{
-	Serial.println(F("Feeder is moving to position 4."));
-
-	digitalWrite(FEEDERPWR, RELAYON);
-	digitalWrite(FEEDERFWD, RELAYON);
-	digitalWrite(FEEDERREV, RELAYOFF);
-
-	proxTriggered = false;
-}
-
-void movePos3_4Update()
-{
-	if (proxTriggered)
-	{
-		Serial.println(F("position4 is detected!"));
-
-		digitalWrite(FEEDERPWR, RELAYOFF);
-		digitalWrite(FEEDERFWD, RELAYOFF);
-		digitalWrite(FEEDERREV, RELAYOFF);
-		controller.transitionTo(Pos4Supply);
-	}
-}
-
-void supplyPos4Enter()
-{
-	Serial.println(F("Carrier is moving to east in position 4."));
-
-	digitalWrite(CARRIERPWR, RELAYON);
-	digitalWrite(CARRIERFWD, RELAYOFF);
-	digitalWrite(CARRIERREV, RELAYON);
-
-	digitalWrite(SUPPLYPWR, RELAYON);
-	digitalWrite(SUPPLYACT, RELAYON);
-}
-
-void supplyPos4Update()
-{
-	if (switchEastTON.Q)
-	{
-		// stop 
-		digitalWrite(CARRIERPWR, RELAYOFF);
-		digitalWrite(CARRIERFWD, RELAYOFF);
-		digitalWrite(CARRIERREV, RELAYOFF);
-
-		digitalWrite(SUPPLYPWR, RELAYOFF);
-		digitalWrite(SUPPLYACT, RELAYOFF);
-
-		controller.transitionTo(Standby);
-	}
-}
-
-void standbyEnter()
-{
-	digitalWrite(CARRIERPWR, RELAYOFF);
-	digitalWrite(CARRIERFWD, RELAYOFF);
-	digitalWrite(CARRIERREV, RELAYOFF);
-
-	digitalWrite(FEEDERPWR, RELAYOFF);
-	digitalWrite(FEEDERFWD, RELAYOFF);
-	digitalWrite(FEEDERREV, RELAYOFF);
-
-	digitalWrite(SUPPLYPWR, RELAYOFF);
-	digitalWrite(SUPPLYACT, RELAYOFF);
-
-	Serial.println(F("Standby entered!"));
-}
-
-void standbyUpdate()
-{
-	DateTime now = rtc.now();
-	uint32_t currtime = now.hour();
-	currtime *= 100;
-	currtime += now.minute();
-	currtime *= 100;
-	currtime += now.second();
-
-	for (uint8_t idx = 0; idx < SCHEDULECOUNT; idx++)
-	{
-		uint32_t scheduletime = schedules[idx].nHour;
-		scheduletime *= 100;
-		scheduletime += schedules[idx].nMin;
-		scheduletime *= 100;
-		scheduletime += schedules[idx].nSec;
-
-		if (currtime >= scheduletime && currtime <= (scheduletime + 15))
-		{
-			Serial.println("ready to supply");
-			controller.transitionTo(CarrierToHome);
-			break;
-		}
-	}
-}
-
-void manualEnter()
-{
-	Serial.println("entered into manual Mode");
-	
-	digitalWrite(CARRIERPWR, RELAYOFF);
-	digitalWrite(CARRIERFWD, RELAYOFF);
-	digitalWrite(CARRIERREV, RELAYOFF);
-
-	digitalWrite(FEEDERPWR, RELAYOFF);
-	digitalWrite(FEEDERFWD, RELAYOFF);
-	digitalWrite(FEEDERREV, RELAYOFF);
-
-	digitalWrite(SUPPLYPWR, RELAYOFF);
-	digitalWrite(SUPPLYACT, RELAYOFF);
-
-	remotebutTrg.IN = false;
-	remotebutTrg.PRE = false;
-	remotebutTrg.Q = false;
-}
-
-void manualUpdate()
-{
-	if (buttonEastTON.Q)
-	{
-
-		if (switchEastTON.Q)
-		{
-			Serial.println(F("Manual mode, to East"));
-			digitalWrite(CARRIERPWR, RELAYOFF);
-			digitalWrite(CARRIERFWD, RELAYOFF);
-			digitalWrite(CARRIERREV, RELAYOFF);
-		}
-		else
-		{
-			Serial.println(F("Manual mode, arrived to East"));
-			digitalWrite(CARRIERPWR, RELAYON);
-			digitalWrite(CARRIERFWD, RELAYOFF);
-			digitalWrite(CARRIERREV, RELAYON);
-		}
-
-	}
-	else if (buttonWestTON.Q)
-	{
-		if (switchWestTON.Q)
-		{
-			Serial.println(F("Manual mode, to west"));
-			digitalWrite(CARRIERPWR, RELAYOFF);
-			digitalWrite(CARRIERFWD, RELAYOFF);
-			digitalWrite(CARRIERREV, RELAYOFF);
-		}
-		else
-		{
-			Serial.println(F("Manual mode, arrived to west"));
-			digitalWrite(CARRIERPWR, RELAYON);
-			digitalWrite(CARRIERFWD, RELAYON);
-			digitalWrite(CARRIERREV, RELAYOFF);
-		}
-	}
-	else
-	{
-		digitalWrite(CARRIERPWR, RELAYOFF);
-		digitalWrite(CARRIERFWD, RELAYOFF);
-		digitalWrite(CARRIERREV, RELAYOFF);
-	}
-
-	if (buttonNorthTON.Q)
-	{
-		if (switchNorthTON.Q)
-		{
-			Serial.println(F("Manual mode, arrived to north"));
-			digitalWrite(FEEDERPWR, RELAYOFF);
-			digitalWrite(FEEDERFWD, RELAYOFF);
-			digitalWrite(FEEDERREV, RELAYOFF);
-		}
-		else
-		{
-			Serial.println(F("Manual mode, to north"));
-			digitalWrite(FEEDERPWR, RELAYON);
-			digitalWrite(FEEDERFWD, RELAYON);
-			digitalWrite(FEEDERREV, RELAYOFF);
-		}
-	}
-	else if (buttonSouthTON.Q)
-	{
-		if (switchSouthTON.Q)
-		{
-			Serial.println(F("Manual mode, to south"));
-			digitalWrite(FEEDERPWR, RELAYOFF);
-			digitalWrite(FEEDERFWD, RELAYOFF);
-			digitalWrite(FEEDERREV, RELAYOFF);
-		}
-		else
-		{
-			Serial.println(F("Manual mode, arrived to south"));
-			digitalWrite(FEEDERPWR, RELAYON);
-			digitalWrite(FEEDERFWD, RELAYOFF);
-			digitalWrite(FEEDERREV, RELAYON);
-		}
-	}
-	else
-	{
-		digitalWrite(FEEDERPWR, RELAYOFF);
-		digitalWrite(FEEDERFWD, RELAYOFF);
-		digitalWrite(FEEDERREV, RELAYOFF);
-	}
-
-	remotebutTrg.IN = (buttonEastTON.Q || buttonWestTON.Q) || (buttonNorthTON.Q || buttonSouthTON.Q);
-	FTrgFunc(&remotebutTrg);
-	if (remotebutTrg.Q)
-	{
-		controller.transitionTo(Standby);
-		Serial.println(F("All remote button are released, will be enter standby mode!"));
-	}
-}
-
-// 
 void setup()
 {
 	//
@@ -685,48 +164,380 @@ void setup()
 
 	// init part
 	initPorts();
-	initFBDs();
+
 	Serial.println("System Startup");
 }
 
 static uint32_t nRTCTime = millis();
 const uint32_t RTCINTERVAL = 2000;
+
+void carrierToWest()
+{
+	digitalWrite(CARRIERPWR, RELAYON);
+	digitalWrite(CARRIERFWD, RELAYOFF);
+	digitalWrite(CARRIERREV, RELAYON);
+}
+
+void carrierToEast()
+{
+	digitalWrite(CARRIERPWR, RELAYON);
+	digitalWrite(CARRIERFWD, RELAYON);
+	digitalWrite(CARRIERREV, RELAYOFF);
+}
+
+void carrierStop()
+{
+	digitalWrite(CARRIERPWR, RELAYOFF);
+	digitalWrite(CARRIERFWD, RELAYOFF);
+	digitalWrite(CARRIERREV, RELAYOFF);
+}
+
+void feederStop()
+{
+	digitalWrite(FEEDERPWR, RELAYOFF);
+	digitalWrite(FEEDERFWD, RELAYOFF);
+	digitalWrite(FEEDERREV, RELAYOFF);
+}
+
+void feederToNorth()
+{
+	digitalWrite(FEEDERPWR, RELAYON);
+	digitalWrite(FEEDERFWD, RELAYOFF);
+	digitalWrite(FEEDERREV, RELAYON);
+}
+
+void feederToSouth()
+{
+	digitalWrite(FEEDERPWR, RELAYON);
+	digitalWrite(FEEDERFWD, RELAYON);
+	digitalWrite(FEEDERREV, RELAYOFF);
+}
+
 void loop()
 {
+	{
+		switchEastTON.IN = digitalRead(EASTSWITCH) == false;
+		switchEastTON.update();
 
-	switchEastTON.IN = (digitalRead(EASTSWITCH) == false);
-	TONFunc(&switchEastTON);
+		switchWestTON.IN = digitalRead(WESTSWITCH) == false;
+		switchWestTON.update();
 
-	switchWestTON.IN = (digitalRead(WESTSWITCH) == false);
-	TONFunc(&switchWestTON);
+		switchSouthTON.IN = digitalRead(SOUTHSWITCH) == false;
+		switchSouthTON.update();
 
-	switchSouthTON.IN = (digitalRead(SOUTHSWITCH) == false);
-	TONFunc(&switchSouthTON);
+		switchNorthTON.IN = digitalRead(NORTHSWITCH) == false;
+		switchNorthTON.update();
 
-	switchNorthTON.IN = (digitalRead(NORTHSWITCH) == false);
-	TONFunc(&switchSouthTON);
+		buttonEastTON.IN = digitalRead(EASTBUTTON) == false;
+		buttonEastTON.update();
 
-	buttonEastTON.IN = digitalRead(EASTBUTTON) == false;
-	TONFunc(&buttonEastTON);
+		buttonWestTON.IN = digitalRead(WESTBUTTON) == false;
+		buttonWestTON.update();
 
-	buttonWestTON.IN = digitalRead(WESTBUTTON) == false;
-	TONFunc(&buttonWestTON);
+		buttonSouthTON.IN = digitalRead(SOUTHBUTTON) == false;
+		buttonSouthTON.update();
 
-	buttonSouthTON.IN = digitalRead(SOUTHBUTTON) == false;
-	TONFunc(&buttonSouthTON);
+		buttonNorthTON.IN = digitalRead(NORTHBUTTON) == false;
+		buttonNorthTON.update();
 
-	buttonNorthTON.IN = digitalRead(NORTHBUTTON) == false;
-	TONFunc(&buttonNorthTON);
+		pos2TON.IN = digitalRead(POSITION2) == false;
+		pos2TON.update();
+
+		pos3TON.IN = digitalRead(POSITION3) == false;
+		pos3TON.update();
+	}
 
 	// enter into manual
 	if ((buttonEastTON.Q || buttonWestTON.Q) || (buttonSouthTON.Q || buttonNorthTON.Q))
 	{
-		if(!controller.isInState(Manual))
+		if (!controller.isInState(Manual))
+		{
+			analogWrite(MILLMOTOR, 0);
 			controller.transitionTo(Manual);
+		}
 	}
+
+	remotebutTrg.IN = (buttonEastTON.Q || buttonWestTON.Q) || (buttonNorthTON.Q || buttonSouthTON.Q);
+	remotebutTrg.update();
 
 	// FSM instance update
 	controller.update();
+
+	proxSensorTrg.update();
+	proxSensorTrg.IN = false;
+
+	uint16_t millLevel = analogRead(MILLLEVEL);
+
+	if (controller.isInState(Standby))
+	{
+		analogWrite(MILLMOTOR, 0);
+		carrierStop();
+		feederStop();
+
+		DateTime now = rtc.now();
+		uint32_t currtime = now.hour();
+		currtime *= 100;
+		currtime += now.minute();
+		currtime *= 100;
+		currtime += now.second();
+
+		for (uint8_t idx = 0; idx < SCHEDULECOUNT; idx++)
+		{
+			uint32_t scheduletime = schedules[idx].nHour;
+			scheduletime *= 100;
+			scheduletime += schedules[idx].nMin;
+			scheduletime *= 100;
+			scheduletime += schedules[idx].nSec;
+
+			if (currtime >= scheduletime && currtime <= (scheduletime + 15))
+			{
+				Serial.println("ready to supply");
+				controller.transitionTo(carrierToHome);
+				millActive = false;
+				break;
+			}
+		}
+	}
+	else if (controller.isInState(Manual))
+	{
+		Serial.println("entered into manual Mode");
+
+		if (buttonEastTON.Q)
+		{
+			if (switchEastTON.Q)
+			{
+				Serial.println(F("Manual mode, arrived to East"));
+				carrierStop();
+			}
+			else
+			{
+				Serial.println(F("Manual mode, to East"));
+				carrierToEast();
+			}
+		}
+		else if (buttonWestTON.Q)
+		{
+			if (switchWestTON.Q)
+			{
+				Serial.println(F("Manual mode, arrived to west"));
+				carrierStop();
+			}
+			else
+			{
+				Serial.println(F("Manual mode, to west"));
+				carrierToWest();
+			}
+		}
+		else
+			carrierStop();
+
+		if (buttonNorthTON.Q)
+		{
+			if (switchNorthTON.Q)
+			{
+				Serial.println(F("Manual mode, arrived to north"));
+				feederStop();
+			}
+			else
+			{
+				Serial.println(F("Manual mode, to north"));
+				feederToNorth();
+			}
+		}
+		else if (buttonSouthTON.Q)
+		{
+			if (switchSouthTON.Q)
+			{
+				Serial.println(F("Manual mode, arrived to south"));
+				feederStop();
+			}
+			else
+			{
+				Serial.println(F("Manual mode, to south"));
+				feederToSouth();
+			}
+		}
+		else
+			feederStop();
+
+
+		if (remotebutTrg.Q)
+		{
+			controller.transitionTo(Standby);
+			Serial.println(F("All remote button are released, will be enter standby mode!"));
+		}
+	}
+	else if (controller.isInState(Startup))
+	{
+		carrierStop();
+		feederStop();
+		analogWrite(MILLMOTOR, 0);
+
+		if (controller.timeInCurrentState() > 2000)
+		{
+			Serial.println(F("carrier is moving to west edge!"));
+			controller.transitionTo(carrierToHome);
+		}
+	}
+	else if (controller.isInState(carrierToHome))
+	{
+		carrierToWest();
+		feederStop();
+		analogWrite(MILLMOTOR, 0);
+
+		if (switchWestTON.Q)
+		{
+			Serial.println(F("feeder is moving to south edge!"));
+			controller.transitionTo(feederToHome);
+		}
+	}
+	else if (controller.isInState(feederToHome))
+	{
+		carrierStop();
+		feederToSouth();
+
+		if (switchSouthTON.Q)
+		{
+			feederStop();
+			Serial.println("feeder is in south position");
+			if (firstFlag)
+			{
+				firstFlag = false;
+				Serial.println("enter to standby");
+				controller.transitionTo(Standby);
+			}
+			else
+			{
+				Serial.println("enter to supply cycle");
+				controller.transitionTo(Pos4Supply);
+				Serial.println(F("carrier is moving to east in table4"));
+			}
+		}
+	}
+	else if (controller.isInState(Pos4Supply))
+	{
+		carrierToEast();
+		feederStop();
+		if (proxSensorTrg.Q) // trigger mill motor
+		{
+			millActive = true;
+			Serial.println(F("mill motor will be started"));
+			analogWrite(MILLMOTOR, map(millLevel, 0, 1024, 0, 255));
+		}
+
+		if (millActive)
+		{
+			Serial.print("mill level is ");
+			Serial.println(millLevel);
+			analogWrite(MILLMOTOR, map(millLevel, 0, 1024, 0, 255));
+		}
+
+		if (switchEastTON.Q)
+		{
+			controller.transitionTo(Pos4ToPos3);
+			Serial.println(F("feeder is moving to position 3"));
+		}
+	}
+	else if (controller.isInState(Pos4ToPos3))
+	{
+		carrierStop();
+		feederToNorth();
+		analogWrite(MILLMOTOR, 0);
+
+		if (pos3TON.Q)
+		{
+			Serial.println(F("position3 detected!"));
+			controller.transitionTo(Pos3Supply);
+			Serial.println(F("Carrier is moving to west in table3"));
+			Serial.println(F("mill motor will be started"));
+		}
+	}
+	else if (controller.isInState(Pos3Supply))
+	{
+		feederStop();
+		carrierToWest();
+		analogWrite(MILLMOTOR, map(millLevel, 0, 1024, 0, 255));
+
+		if (proxSensorTrg.Q)
+		{
+			Serial.println(F("mill motor stopped"));
+			controller.transitionTo(Pos3ToPos2);
+			Serial.println(F("feeder is moving to position 2"));
+		}
+	}
+	else if (controller.isInState(Pos3ToPos2))
+	{
+		feederToNorth();
+		carrierStop();
+		analogWrite(MILLMOTOR, 0);
+		if (pos2TON.Q)
+		{
+			Serial.println(F("position2 is detected!"));
+			controller.transitionTo(Pos2Supply);
+			Serial.println(F("Carrier is moving to east in table2"));
+		}
+	}
+	else if (controller.isInState(Pos2Supply))
+	{
+		feederStop();
+		carrierToEast();
+		analogWrite(MILLMOTOR, map(millLevel, 0, 1024, 0, 255));
+		if (switchEastTON.Q)
+		{
+			Serial.println(F("mill motor stopped"));
+			controller.transitionTo(Pos2ToPos1);
+			Serial.println(F("feeder is moving to position 2"));
+		}
+	}
+	else if (controller.isInState(Pos2ToPos1))
+	{
+		feederToNorth();
+		carrierStop();
+		analogWrite(MILLMOTOR, 0);
+		if (switchNorthTON.Q)
+		{
+			Serial.println(F("north switch detected"));
+			controller.transitionTo(Pos1Supply);
+			Serial.println(F("Carrier is moving to west in table1"));
+			millActive = true;
+		}
+	}
+	else if (controller.isInState(Pos1Supply))
+	{
+		feederStop();
+		carrierToWest();
+		if(millActive)
+			analogWrite(MILLMOTOR, map(millLevel, 0, 1024, 0, 255));
+		else
+			analogWrite(MILLMOTOR, 0);
+
+		if (proxSensorTrg.Q)
+		{
+			millActive = false;
+			Serial.println(F("mill motor stopped"));
+		}
+
+		if (switchWestTON.Q)
+		{
+			controller.transitionTo(Pos1ToPos4);
+			Serial.println(F("feeder is moving to south"));
+		}
+
+	}
+	else if (controller.isInState(Pos1ToPos4))
+	{
+		feederToSouth();
+		carrierStop();
+		analogWrite(MILLMOTOR, 0);
+
+		if (switchSouthTON.Q)
+		{
+			Serial.println(F("south switch detected"));
+			controller.transitionTo(Standby);
+			Serial.println(F("entered into standby status"));
+		}
+	}
+
 
 	if ((millis() - nRTCTime) > RTCINTERVAL)
 	{
@@ -746,10 +557,9 @@ void loop()
 		Serial.print(now.second(), DEC);
 		Serial.println();
 	}
-
 }
 
 void targetOver()
 {
-	proxTriggered = true;
+	proxSensorTrg.IN = true;
 }
